@@ -15,6 +15,7 @@ from src.config import RAGConfig
 from src.generator import answer, double_answer, dedupe_generated_text
 from src.index_builder import build_index
 from src.instrumentation.logging import get_logger
+from src.incremental import StateStore
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
 from src.query_enhancement import generate_hypothetical_document, contextualize_query
@@ -50,10 +51,23 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
+
+def initialize_incremental_state(cfg: RAGConfig) -> StateStore:
+    state_db_path = pathlib.Path(cfg.state_db_path)
+    print("Initializing incremental state store...")
+    store = StateStore(state_db_path)
+    store.connect()
+    print("Incremental state store ready.")
+    return store
+
 def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
     strategy = cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
     artifacts_dir = cfg.get_artifacts_directory()
+    state_store: Optional[StateStore] = None
+
+    if cfg.incremental_mode:
+        state_store = initialize_incremental_state(cfg)
 
     data_dir = pathlib.Path("data")
     print(f"Looking for markdown files in {data_dir.resolve()}...")
@@ -65,16 +79,21 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         print("ERROR: No markdown files found in data/.", file=sys.stderr)
         sys.exit(1)
 
-    build_index(
-        markdown_file=str(md_files[0]),
-        chunker=chunker,
-        chunk_config=cfg.chunk_config,
-        embedding_model_path=cfg.embed_model,
-        artifacts_dir=artifacts_dir,
-        index_prefix=args.index_prefix,
-        use_multiprocessing=args.multiproc_indexing,
-        use_headings=args.embed_with_headings,
-    )
+    try:
+        build_index(
+            markdown_file=str(md_files[0]),
+            chunker=chunker,
+            chunk_config=cfg.chunk_config,
+            embedding_model_path=cfg.embed_model,
+            artifacts_dir=artifacts_dir,
+            index_prefix=args.index_prefix,
+            use_multiprocessing=args.multiproc_indexing,
+            use_headings=args.embed_with_headings,
+        )
+    # cleanup
+    finally:
+        if state_store is not None:
+            state_store.close()
 
 def use_indexed_chunks(question: str, chunks: list) -> list:
     # Logic for keyword matching from textbook index
