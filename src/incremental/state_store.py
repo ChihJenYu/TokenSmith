@@ -43,6 +43,7 @@ class StateStore:
     def __init__(self, db_path: os.PathLike | str) -> None:
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
+        self._schema_path = Path(__file__).with_name("schema.sql")
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -244,68 +245,8 @@ class StateStore:
         """
         Ensure the expected tables and indexes are available on this connection.
         """
-        self._create_tables_if_missing()
-        self._create_indexes_if_missing()
+        self.connection.executescript(self._schema_path.read_text(encoding="utf-8"))
         self.connection.commit()
-
-    def _create_tables_if_missing(self) -> None:
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                path TEXT NOT NULL UNIQUE,
-                last_modified_at REAL NOT NULL,
-                size INTEGER NOT NULL,
-                doc_hash TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_id INTEGER NOT NULL,
-                order_in_parent INTEGER NOT NULL,
-                heading TEXT NOT NULL,
-                level INTEGER NOT NULL,
-                section_hash TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
-                UNIQUE(document_id, order_in_parent)
-            )
-            """
-        )
-        self.connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chunks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                section_id INTEGER NOT NULL,
-                order_in_parent INTEGER NOT NULL,
-                chunk_hash TEXT NOT NULL,
-                text TEXT NOT NULL,
-                bm25_tokens TEXT,
-                embeddding BLOB,
-                metadata_json TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(section_id) REFERENCES sections(id) ON DELETE CASCADE,
-                UNIQUE(section_id, order_in_parent)
-            )
-            """
-        )
-
-    def _create_indexes_if_missing(self) -> None:
-        statements = [
-            "CREATE INDEX IF NOT EXISTS idx_documents_path ON documents(path)",
-            "CREATE INDEX IF NOT EXISTS idx_sections_document_id ON sections(document_id)",
-            "CREATE INDEX IF NOT EXISTS idx_chunks_section_id ON chunks(section_id)",
-            "CREATE INDEX IF NOT EXISTS idx_chunks_chunk_hash ON chunks(chunk_hash)",
-        ]
-        for statement in statements:
-            self.connection.execute(statement)
 
     @staticmethod
     def _serialize_json(value: Optional[Any]) -> Optional[str]:
