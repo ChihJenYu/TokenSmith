@@ -31,7 +31,7 @@ def hash_components(*components: Any) -> str:
         )
         # turns to bytes
         payload = serialized.encode("utf-8")
-        hasher.update(str(len(payload)))
+        hasher.update(str(len(payload)).encode("ascii"))
         hasher.update(b":")
         hasher.update(payload)
         hasher.update(b"|")

@@ -13,9 +13,8 @@ from rich.markdown import Markdown
 
 from src.config import RAGConfig
 from src.generator import answer, double_answer, dedupe_generated_text
-from src.index_builder import build_index
 from src.instrumentation.logging import get_logger
-from src.incremental import StateStore
+from src.incremental import Driver, StateStore
 from src.ranking.ranker import EnsembleRanker
 from src.preprocessing.chunking import DocumentChunker
 from src.query_enhancement import generate_hypothetical_document, contextualize_query
@@ -64,10 +63,7 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
     strategy = cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
     artifacts_dir = cfg.get_artifacts_directory()
-    state_store: Optional[StateStore] = None
-
-    if cfg.incremental_mode:
-        state_store = initialize_incremental_state(cfg)
+    state_store: Optional[StateStore] = initialize_incremental_state(cfg)
 
     data_dir = pathlib.Path("data")
     print(f"Looking for markdown files in {data_dir.resolve()}...")
@@ -80,8 +76,8 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         sys.exit(1)
 
     try:
-        build_index(
-            markdown_file=str(md_files[0]),
+        driver = Driver(
+            state_store=state_store,
             chunker=chunker,
             chunk_config=cfg.chunk_config,
             embedding_model_path=cfg.embed_model,
@@ -89,7 +85,9 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
             index_prefix=args.index_prefix,
             use_multiprocessing=args.multiproc_indexing,
             use_headings=args.embed_with_headings,
+            incremental_mode=cfg.incremental_mode,
         )
+        driver.run([str(md_file) for md_file in md_files])
     # cleanup
     finally:
         if state_store is not None:

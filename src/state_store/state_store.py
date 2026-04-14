@@ -3,40 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-
-@dataclass(frozen=True)
-class DocumentRecord:
-    path: str
-    last_modified_at: float
-    size: int
-    doc_hash: Optional[str]
-    is_active: bool = True
-
-
-@dataclass(frozen=True)
-class SectionRecord:
-    document_id: int
-    order_in_parent: int
-    heading: str
-    level: int
-    section_hash: Optional[str]
-    is_active: bool = True
-
-
-@dataclass(frozen=True)
-class ChunkRecord:
-    section_id: int
-    order_in_parent: int
-    chunk_hash: str
-    text: str
-    bm25_tokens: Optional[Any] = None
-    embeddding: Optional[bytes] = None
-    metadata_json: Optional[Any] = None
-    is_active: bool = True
+from .chunk_record import ChunkRecord
+from .document_record import DocumentRecord
+from .section_record import SectionRecord
 
 
 class StateStore:
@@ -72,6 +44,13 @@ class StateStore:
             "SELECT * FROM documents WHERE path = ?",
             (path,),
         ).fetchone()
+
+    def get_all_documents(self, *, is_active: bool = False) -> list[sqlite3.Row]:
+        query = "SELECT * FROM documents"
+        if is_active:
+            query += " WHERE is_active = 1"
+        query += " ORDER BY path"
+        return list(self.connection.execute(query).fetchall())
 
     def get_sections_for_document(
         self,
@@ -114,10 +93,11 @@ class StateStore:
     def get_all_active_chunks(self) -> Iterable[sqlite3.Row]:
         return self.connection.execute(
             """
-            SELECT c.*, s.document_id
+            SELECT c.*, s.document_id, d.path AS source_path
             FROM chunks c
             JOIN sections s ON s.id = c.section_id
-            WHERE c.is_active = 1 AND s.is_active = 1
+            JOIN documents d ON d.id = s.document_id
+            WHERE c.is_active = 1 AND s.is_active = 1 AND d.is_active = 1
             ORDER BY s.document_id, s.order_in_parent, c.order_in_parent
             """
         )
@@ -242,9 +222,6 @@ class StateStore:
         self.connection.commit()
 
     def _create_or_load_schema(self) -> None:
-        """
-        Ensure the expected tables and indexes are available on this connection.
-        """
         self.connection.executescript(self._schema_path.read_text(encoding="utf-8"))
         self.connection.commit()
 

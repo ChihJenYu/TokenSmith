@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 import faiss
+import numpy as np
 from rank_bm25 import BM25Okapi
 
 from src.embedder import SentenceTransformer
@@ -40,6 +41,8 @@ class ChunkRecord:
     text: str
     source: str
     metadata: Dict[str, Any]
+    bm25_tokens: List[str] | None = None
+    embedding: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +57,7 @@ class RetrievalArtifacts:
 
 # ------------------------ Main index builder -----------------------------
 
-# process docuemnt into chunks -> build embedding artifacts (tokens & embedding) -> persist to state db
+# Use incremental index driver instead
 def build_index(
     markdown_file: str,
     *,
@@ -66,25 +69,8 @@ def build_index(
     use_multiprocessing: bool = False,
     use_headings: bool = False,
 ) -> None:
-    chunk_records = process_markdown_document(
-        markdown_file,
-        chunker=chunker,
-        chunk_config=chunk_config,
-        use_headings=use_headings,
-        exclusion_keywords=DEFAULT_EXCLUSION_KEYWORDS,
-    )
+    pass
 
-    artifacts = build_retrieval_artifacts(
-        chunk_records,
-        embedding_model_path=embedding_model_path,
-        use_multiprocessing=use_multiprocessing,
-    )
-
-    persist_retrieval_artifacts(
-        artifacts,
-        artifacts_dir=artifacts_dir,
-        index_prefix=index_prefix,
-    )
 
 # Parse and chunk one markdown document into reusable chunk records
 def process_markdown_document(
@@ -172,13 +158,16 @@ def extract_chunk_pages(sub_chunk: str, current_page: int) -> tuple[List[int], i
 
     return sorted(chunk_pages), current_page
 
+
 def embed_chunks(
     chunks: List[str],
     *,
     embedding_model_path: str,
     use_multiprocessing: bool = False,
 ):
-    print(f"Embedding {len(chunks):,} chunks with {pathlib.Path(embedding_model_path).stem} ...")
+    print(
+        f"Embedding {len(chunks):,} chunks with {pathlib.Path(embedding_model_path).stem} ..."
+    )
     embedder = SentenceTransformer(embedding_model_path)
 
     if use_multiprocessing:
@@ -204,29 +193,36 @@ def embed_chunks(
 def tokenizes_chunks(chunks: List[str]) -> List[List[str]]:
     return [preprocess_for_bm25(chunk) for chunk in chunks]
 
+
 def build_faiss_index(embeddings) -> faiss.Index:
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
     return index
 
+
 def build_bm25_index(tokenized_chunks: List[List[str]]) -> BM25Okapi:
     return BM25Okapi(tokenized_chunks)
 
+
 def build_retrieval_artifacts(
     chunk_records: List[ChunkRecord],
-    *,
-    embedding_model_path: str,
-    use_multiprocessing: bool = False,
 ) -> RetrievalArtifacts:
+    if not chunk_records:
+        raise ValueError("ChunkRecord was not provided.")
+
     chunks: List[str] = []
     sources: List[str] = []
     metadata: List[Dict[str, Any]] = []
     page_to_chunk_map: Dict[int, List[int]] = {}
+    embeddings: List[np.ndarray | None] = []
+    tokenized_chunks: List[List[str] | None] = []
 
     for chunk_id, chunk_record in enumerate(chunk_records):
         chunks.append(chunk_record.text)
         sources.append(chunk_record.source)
+        embeddings.append(chunk_record.embedding)
+        tokenized_chunks.append(chunk_record.bm25_tokens)
 
         meta = dict(chunk_record.metadata)
         meta["chunk_id"] = chunk_id
@@ -235,17 +231,26 @@ def build_retrieval_artifacts(
         for page_number in meta.get("page_numbers", []):
             page_to_chunk_map.setdefault(page_number, []).append(chunk_id)
 
-    embeddings = embed_chunks(
-        chunks,
-        embedding_model_path=embedding_model_path,
-        use_multiprocessing=use_multiprocessing,
+    if any(embedding is None for embedding in embeddings):
+        raise ValueError(
+            "Expected all chunk embeddings to be populated before materialization"
+        )
+    if any(tokens is None for tokens in tokenized_chunks):
+        raise ValueError(
+            "Expected all chunk BM25 tokenizations to be populated before materialization"
+        )
+
+    resolved_embeddings = np.stack(
+        [np.asarray(embedding, dtype=np.float32) for embedding in embeddings]
     )
-    tokenized_chunks = tokenizes_chunks(chunks)
+    resolved_tokenized_chunks = [
+        tokens for tokens in tokenized_chunks if tokens is not None
+    ]
 
     print(f"Building FAISS index for {len(chunks):,} chunks...")
-    faiss_index = build_faiss_index(embeddings)
+    faiss_index = build_faiss_index(resolved_embeddings)
     print(f"Building BM25 index for {len(chunks):,} chunks...")
-    bm25_index = build_bm25_index(tokenized_chunks)
+    bm25_index = build_bm25_index(resolved_tokenized_chunks)
 
     return RetrievalArtifacts(
         faiss_index=faiss_index,
@@ -256,7 +261,8 @@ def build_retrieval_artifacts(
         page_to_chunk_map=page_to_chunk_map,
     )
 
-def persist_retrieval_artifacts(
+
+def persist_to_index(
     artifacts: RetrievalArtifacts,
     *,
     artifacts_dir: os.PathLike,
@@ -270,7 +276,9 @@ def persist_retrieval_artifacts(
         json.dump(artifacts.page_to_chunk_map, f, indent=2)
     print(f"Saved page to chunk ID map: {output_file}")
 
-    faiss.write_index(artifacts.faiss_index, str(artifacts_dir / f"{index_prefix}.faiss"))
+    faiss.write_index(
+        artifacts.faiss_index, str(artifacts_dir / f"{index_prefix}.faiss")
+    )
     print(f"FAISS Index built successfully: {index_prefix}.faiss")
 
     with open(artifacts_dir / f"{index_prefix}_bm25.pkl", "wb") as f:
@@ -285,7 +293,9 @@ def persist_retrieval_artifacts(
         pickle.dump(artifacts.metadata, f)
     print(f"Saved all index artifacts with prefix: {index_prefix}")
 
+
 # ------------------------ Helper functions ------------------------------
+
 
 def preprocess_for_bm25(text: str) -> list[str]:
     """
