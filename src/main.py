@@ -59,20 +59,40 @@ def initialize_incremental_state(cfg: RAGConfig) -> StateStore:
     print("Incremental state store ready.")
     return store
 
+
+def discover_markdown_files(args: argparse.Namespace) -> List[pathlib.Path]:
+    pdf_dir = pathlib.Path(args.pdf_dir)
+    candidate_roots: List[pathlib.Path] = [pathlib.Path("data")]
+
+    if pdf_dir.parent not in candidate_roots:
+        candidate_roots.append(pdf_dir.parent)
+
+    markdown_files: dict[str, pathlib.Path] = {}
+    for root in candidate_roots:
+        if not root.exists():
+            continue
+
+        for markdown_file in root.rglob("*.md"):
+            markdown_files[str(markdown_file.resolve())] = markdown_file
+
+    return sorted(markdown_files.values())
+
 def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
     strategy = cfg.get_chunk_strategy()
     chunker = DocumentChunker(strategy=strategy, keep_tables=args.keep_tables)
     artifacts_dir = cfg.get_artifacts_directory()
     state_store: Optional[StateStore] = initialize_incremental_state(cfg)
 
-    data_dir = pathlib.Path("data")
-    print(f"Looking for markdown files in {data_dir.resolve()}...")
-    md_files = sorted(data_dir.glob("*.md"))
+    print("Looking for markdown files in the corpus...")
+    md_files = discover_markdown_files(args)
     print(f"Found {len(md_files)} markdown files.")
     print(f"First 5 markdown files: {[str(f) for f in md_files[:5]]}")
 
     if not md_files:
-        print("ERROR: No markdown files found in data/.", file=sys.stderr)
+        print(
+            f"ERROR: No markdown files found under data/ or {pathlib.Path(args.pdf_dir).parent}/.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
