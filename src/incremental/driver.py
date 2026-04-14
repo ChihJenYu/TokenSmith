@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 from typing import List
 import numpy as np
 
+from src.instrumentation.logging import get_logger
 from src.index_builder import (
     PAGE_MARKER_PATTERN,
     ChunkRecord as RetrievalChunkRecord,
@@ -57,7 +59,20 @@ class Driver:
         self.exclusion_keywords = exclusion_keywords or DEFAULT_EXCLUSION_KEYWORDS
 
     def run(self, markdown_files: List[str]) -> None:
+        logger = get_logger()
+        run_started_at = time.perf_counter()
         markdown_paths = [str(Path(path)) for path in markdown_files]
+        metrics = {
+            "total_documents_scanned": len(markdown_paths),
+            "changed_documents": 0,
+            "changed_sections": 0,
+            "changed_chunks": 0,
+            "reused_chunks": 0,
+            "re_embedded_chunks": 0,
+            "chunk_reuse_rate": 0.0,
+            "embedding_time_seconds": 0.0,
+            "total_update_time_seconds": 0.0,
+        }
         self.deactivate_documents(keep_list=markdown_paths)
 
         for markdown_path in markdown_paths:
@@ -74,10 +89,32 @@ class Driver:
                     last_modified_at,
                     size,
                 )
-                # embeddings
-                embedding_updates = self.retrieve_or_create_embeddings(
-                    prepared_document
+                metrics["changed_documents"] += 1
+                metrics["changed_sections"] += len(prepared_document.sections)
+                cached_chunks = self.get_cached_chunks(prepared_document)
+                metrics["changed_chunks"] += sum(
+                    len(prepared_section.chunk_records)
+                    for prepared_section in prepared_document.sections
                 )
+                metrics["reused_chunks"] += sum(
+                    1
+                    for cached_chunk in cached_chunks.values()
+                    if cached_chunk is not None
+                    and cached_chunk["embeddding"] is not None
+                    and cached_chunk["bm25_tokens"] is not None
+                )
+
+                # embeddings
+                (
+                    embedding_updates,
+                    re_embedded_chunks,
+                    embedding_time_seconds,
+                ) = self.retrieve_or_create_embeddings(
+                    prepared_document,
+                    cached_chunks,
+                )
+                metrics["re_embedded_chunks"] += re_embedded_chunks
+                metrics["embedding_time_seconds"] += embedding_time_seconds
                 for section_idx, chunk_idx, embedding_blob in embedding_updates:
                     chunk_record = prepared_document.sections[
                         section_idx
@@ -97,7 +134,8 @@ class Driver:
 
                 # BM25
                 tokenization_updates = self.retrieve_or_create_tokenizations(
-                    prepared_document
+                    prepared_document,
+                    cached_chunks,
                 )
                 for section_idx, chunk_idx, bm25_tokens in tokenization_updates:
                     chunk_record = prepared_document.sections[section_idx].chunk_records[chunk_idx]
@@ -120,6 +158,20 @@ class Driver:
             artifacts,
             artifacts_dir=self.artifacts_dir,
             index_prefix=self.index_prefix,
+        )
+        if metrics["changed_chunks"] > 0:
+            metrics["chunk_reuse_rate"] = (
+                metrics["reused_chunks"] / metrics["changed_chunks"]
+            )
+        metrics["total_update_time_seconds"] = time.perf_counter() - run_started_at
+        logger.save_index_log(
+            mode="incremental" if self.incremental_mode else "full_rebuild",
+            metrics=metrics,
+            additional_log_info={
+                "index_prefix": self.index_prefix,
+                "artifacts_dir": str(self.artifacts_dir),
+                "markdown_file_count": len(markdown_paths),
+            },
         )
 
     def get_document_file_state(self, markdown_path: str) -> tuple[float, int]:
@@ -146,6 +198,18 @@ class Driver:
             and existing_document["size"] == size
             and existing_document["is_active"] == 1
         )
+
+    def get_cached_chunks(
+        self,
+        prepared_document: PreparedDocument,
+    ) -> dict[tuple[int, int], object | None]:
+        cached_chunks: dict[tuple[int, int], object | None] = {}
+        for section_idx, prepared_section in enumerate(prepared_document.sections):
+            for chunk_idx, chunk_record in enumerate(prepared_section.chunk_records):
+                cached_chunks[(section_idx, chunk_idx)] = self.state_store.get_chunk_by_hash(
+                    chunk_record.chunk_hash
+                )
+        return cached_chunks
 
     # documents, sections, chunks
     def persist_to_state_store(self, prepared_document: PreparedDocument) -> None:
@@ -291,15 +355,14 @@ class Driver:
     def retrieve_or_create_embeddings(
         self,
         prepared_document: PreparedDocument,
-    ) -> List[tuple[int, int, bytes]]:
+        cached_chunks: dict[tuple[int, int], object | None],
+    ) -> tuple[List[tuple[int, int, bytes]], int, float]:
         embedding_updates: List[tuple[int, int, bytes]] = []
         missing_chunks: List[tuple[int, int, StateChunkRecord]] = []
 
         for section_idx, prepared_section in enumerate(prepared_document.sections):
             for chunk_idx, chunk_record in enumerate(prepared_section.chunk_records):
-                cached_chunk = self.state_store.get_chunk_by_hash(
-                    chunk_record.chunk_hash
-                )
+                cached_chunk = cached_chunks[(section_idx, chunk_idx)]
                 if cached_chunk is not None and cached_chunk["embeddding"] is not None:
                     embedding_updates.append(
                         (section_idx, chunk_idx, cached_chunk["embeddding"])
@@ -307,13 +370,16 @@ class Driver:
                 else:
                     missing_chunks.append((section_idx, chunk_idx, chunk_record))
 
+        embedding_time_seconds = 0.0
         if missing_chunks:
             missing_texts = [chunk_record.text for _, _, chunk_record in missing_chunks]
+            embedding_started_at = time.perf_counter()
             computed_embeddings = embed_chunks(
                 missing_texts,
                 embedding_model_path=self.embedding_model_path,
                 use_multiprocessing=self.use_multiprocessing,
             )
+            embedding_time_seconds = time.perf_counter() - embedding_started_at
             for (section_idx, chunk_idx, _chunk_record), embedding in zip(
                 missing_chunks, computed_embeddings
             ):
@@ -325,20 +391,19 @@ class Driver:
                     )
                 )
 
-        return embedding_updates
+        return embedding_updates, len(missing_chunks), embedding_time_seconds
 
     def retrieve_or_create_tokenizations(
         self,
         prepared_document: PreparedDocument,
+        cached_chunks: dict[tuple[int, int], object | None],
     ) -> List[tuple[int, int, List[str]]]:
         tokenization_updates: List[tuple[int, int, List[str]]] = []
         missing_chunks: List[tuple[int, int, StateChunkRecord]] = []
 
         for section_idx, prepared_section in enumerate(prepared_document.sections):
             for chunk_idx, chunk_record in enumerate(prepared_section.chunk_records):
-                cached_chunk = self.state_store.get_chunk_by_hash(
-                    chunk_record.chunk_hash
-                )
+                cached_chunk = cached_chunks[(section_idx, chunk_idx)]
                 if cached_chunk is not None and cached_chunk["bm25_tokens"] is not None:
                     tokenization_updates.append(
                         (

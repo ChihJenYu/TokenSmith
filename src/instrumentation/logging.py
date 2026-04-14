@@ -83,13 +83,47 @@ class RunLogger:
         if additional_log_info:
             for key in additional_log_info:
                 if key in log_data:
-                    print(f"Warning: Key '{key}' in additional_log_info conflicts with existing log data keys. Skipping this key.")
+                    print(f"Warning: Key '{key}' in additional_log_info conflicts with existing log data keys.")
                 else:
                     log_data[key] = additional_log_info[key]
                     
         log_file = self.logs_dir / f"{log_id}.json"
         
         # Write as a single pretty-printed JSON file
+        with open(log_file, "w", encoding="utf-8") as f:
+            json.dump(log_data, f, ensure_ascii=False, indent=4, cls=NpEncoder)
+
+    def save_index_log(
+        self,
+        *,
+        mode: str,
+        metrics: Dict[str, Any],
+        config_state: Optional[Dict[str, Any]] = None,
+        additional_log_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_id = f"index_{timestamp_str}"
+
+        log_data = {
+            "timestamp": datetime.now().isoformat(),
+            "event": "index_run",
+            "mode": mode,
+            "metrics": metrics,
+        }
+
+        if config_state is not None:
+            log_data["config_state"] = config_state
+
+        if additional_log_info:
+            for key, value in additional_log_info.items():
+                if key in log_data:
+                    print(
+                        f"Warning: Key '{key}' in additional_log_info conflicts with existing log data keys."
+                    )
+                else:
+                    log_data[key] = value
+
+        log_file = self.logs_dir / f"{log_id}.json"
         with open(log_file, "w", encoding="utf-8") as f:
             json.dump(log_data, f, ensure_ascii=False, indent=4, cls=NpEncoder)
 
@@ -100,7 +134,6 @@ def get_logger():
     if _INSTANCE is None:
         _INSTANCE = RunLogger()
     return _INSTANCE
-
 
 
 
