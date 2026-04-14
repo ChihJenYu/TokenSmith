@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Welcome to TokenSmith!")
     parser.add_argument("mode", choices=["index", "chat"], help="operation mode")
     parser.add_argument("--pdf_dir", default="data/chapters/", help="directory containing PDF files")
+    parser.add_argument(
+        "--markdown_dir",
+        default="data",
+        help="directory containing markdown files to index",
+    )
     parser.add_argument("--index_prefix", default="textbook_index", help="prefix for generated index files")
     parser.add_argument("--model_path", help="path to generation model")
     parser.add_argument("--system_prompt_mode", choices=["baseline", "tutor", "concise", "detailed"], default="baseline")
@@ -60,20 +65,22 @@ def initialize_incremental_state(cfg: RAGConfig) -> StateStore:
     return store
 
 
-def discover_markdown_files(args: argparse.Namespace) -> List[pathlib.Path]:
-    pdf_dir = pathlib.Path(args.pdf_dir)
-    candidate_roots: List[pathlib.Path] = [pathlib.Path("data")]
+def get_page_to_chunk_map_path(
+    cfg: RAGConfig,
+    index_prefix: str,
+) -> pathlib.Path:
+    artifacts_dir = pathlib.Path(cfg.get_artifacts_directory())
+    return artifacts_dir / f"{index_prefix}_page_to_chunk_map.json"
 
-    if pdf_dir.parent not in candidate_roots:
-        candidate_roots.append(pdf_dir.parent)
+
+def discover_markdown_files(args: argparse.Namespace) -> List[pathlib.Path]:
+    markdown_root = pathlib.Path(args.markdown_dir)
+    if not markdown_root.exists():
+        return []
 
     markdown_files: dict[str, pathlib.Path] = {}
-    for root in candidate_roots:
-        if not root.exists():
-            continue
-
-        for markdown_file in root.rglob("*.md"):
-            markdown_files[str(markdown_file.resolve())] = markdown_file
+    for markdown_file in markdown_root.rglob("*.md"):
+        markdown_files[str(markdown_file.resolve())] = markdown_file
 
     return sorted(markdown_files.values())
 
@@ -90,7 +97,7 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
 
     if not md_files:
         print(
-            f"ERROR: No markdown files found under data/ or {pathlib.Path(args.pdf_dir).parent}/.",
+            f"ERROR: No markdown files found under {pathlib.Path(args.markdown_dir).resolve()}.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -113,12 +120,18 @@ def run_index_mode(args: argparse.Namespace, cfg: RAGConfig):
         if state_store is not None:
             state_store.close()
 
-def use_indexed_chunks(question: str, chunks: list) -> list:
+def use_indexed_chunks(
+    question: str,
+    chunks: list,
+    *,
+    extracted_index_path: pathlib.Path,
+    page_to_chunk_map_path: pathlib.Path,
+) -> list:
     # Logic for keyword matching from textbook index
     try:
-        with open('index/sections/textbook_index_page_to_chunk_map.json', 'r') as f:
+        with open(page_to_chunk_map_path, 'r') as f:
             page_to_chunk_map = json.load(f)
-        with open('data/extracted_index.json', 'r') as f:
+        with open(extracted_index_path, 'r') as f:
             extracted_index = json.load(f)
     except FileNotFoundError:
         return []
@@ -166,7 +179,12 @@ def get_answer(
         # No chunks - baseline mode
         ranked_chunks = []
     elif cfg.use_indexed_chunks:
-        ranked_chunks, topk_idxs = use_indexed_chunks(question, chunks)
+        ranked_chunks, topk_idxs = use_indexed_chunks(
+            question,
+            chunks,
+            extracted_index_path=pathlib.Path(cfg.extracted_index_path),
+            page_to_chunk_map_path=get_page_to_chunk_map_path(cfg, args.index_prefix),
+        )
     else:
         retrieval_query = question
         # print(f"Retrieval query: {retrieval_query}")
@@ -326,7 +344,12 @@ def run_chat_session(args: argparse.Namespace, cfg: RAGConfig):
         print(f"Loaded {len(chunks)} chunks and {len(sources)} sources from artifacts.")
         retrievers = [FAISSRetriever(faiss_idx, cfg.embed_model), BM25Retriever(bm25_idx)]
         if cfg.ranker_weights.get("index_keywords", 0) > 0:
-            retrievers.append(IndexKeywordRetriever(cfg.extracted_index_path, cfg.page_to_chunk_map_path))
+            retrievers.append(
+                IndexKeywordRetriever(
+                    cfg.extracted_index_path,
+                    get_page_to_chunk_map_path(cfg, args.index_prefix),
+                )
+            )
         
         ranker = EnsembleRanker(ensemble_method=cfg.ensemble_method, weights=cfg.ranker_weights, rrf_k=int(cfg.rrf_k))
         print("Loaded retrievers and initialized ranker.")

@@ -253,3 +253,7 @@ __marimo__/
 
 tests/results
 
+# sqlite state
+*.db
+evaluation/archive
+evaluation/runtime
