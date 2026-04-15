@@ -44,8 +44,9 @@ class RunLogger:
         page_numbers_list = [page_map.get(i, 1) for i in top_idxs]
         # make sure chunks, top_idxs, sources, and ordered_scores are the same length
         if not (len(chunks) == len(top_idxs) == len(sources) == len(ordered_scores) == len(page_numbers_list)):
-            print("Warning: Lengths of chunks, top_idxs, sources, ordered_scores, and page_numbers do not match.")
-            print("Defaulting to long form logging ")
+            print(
+                "Warning: Degraded chat logging because retrieved chunk payloads are not aligned with top_idxs and scores."
+            )
             log_data = {
                 "timestamp": datetime.now().isoformat(),
                 "query": query,
@@ -134,6 +135,5 @@ def get_logger():
     if _INSTANCE is None:
         _INSTANCE = RunLogger()
     return _INSTANCE
-
 
 
