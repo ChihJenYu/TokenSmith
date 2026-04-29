@@ -57,6 +57,8 @@ class RAGConfig:
     # incremental indexing
     incremental_mode: bool = False
     state_db_path: str = "index/state/tokensmith_state.db"
+    enable_metadata_skip: bool = True
+    enable_chunk_reuse: bool = True
 
     # ---------- factory + validation ----------
     @classmethod

@@ -257,3 +257,4 @@ tests/results
 *.db
 evaluation/archive
 evaluation/runtime
+evaluation/results

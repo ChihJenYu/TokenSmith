@@ -45,6 +45,8 @@ class Driver:
         use_multiprocessing: bool = False,
         use_headings: bool = False,
         incremental_mode: bool = True,
+        enable_metadata_skip: bool = True,
+        enable_chunk_reuse: bool = True,
         exclusion_keywords: List[str] | None = None,
     ) -> None:
         self.state_store = state_store
@@ -56,6 +58,8 @@ class Driver:
         self.use_multiprocessing = use_multiprocessing
         self.use_headings = use_headings
         self.incremental_mode = incremental_mode
+        self.enable_metadata_skip = enable_metadata_skip
+        self.enable_chunk_reuse = enable_chunk_reuse
         self.exclusion_keywords = exclusion_keywords or DEFAULT_EXCLUSION_KEYWORDS
 
     def run(self, markdown_files: List[str]) -> None:
@@ -167,6 +171,11 @@ class Driver:
         logger.save_index_log(
             mode="incremental" if self.incremental_mode else "full_rebuild",
             metrics=metrics,
+            config_state={
+                "incremental_mode": self.incremental_mode,
+                "enable_metadata_skip": self.enable_metadata_skip,
+                "enable_chunk_reuse": self.enable_chunk_reuse,
+            },
             additional_log_info={
                 "index_prefix": self.index_prefix,
                 "artifacts_dir": str(self.artifacts_dir),
@@ -190,6 +199,9 @@ class Driver:
         if not self.incremental_mode:
             return False
 
+        if not self.enable_metadata_skip:
+            return False
+
         if existing_document is None:
             return False
 
@@ -204,6 +216,12 @@ class Driver:
         prepared_document: PreparedDocument,
     ) -> dict[tuple[int, int], object | None]:
         cached_chunks: dict[tuple[int, int], object | None] = {}
+        if not self.enable_chunk_reuse:
+            for section_idx, prepared_section in enumerate(prepared_document.sections):
+                for chunk_idx, _chunk_record in enumerate(prepared_section.chunk_records):
+                    cached_chunks[(section_idx, chunk_idx)] = None
+            return cached_chunks
+
         for section_idx, prepared_section in enumerate(prepared_document.sections):
             for chunk_idx, chunk_record in enumerate(prepared_section.chunk_records):
                 cached_chunks[(section_idx, chunk_idx)] = self.state_store.get_chunk_by_hash(
