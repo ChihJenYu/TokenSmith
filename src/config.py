@@ -59,6 +59,8 @@ class RAGConfig:
     state_db_path: str = "index/state/tokensmith_state.db"
     enable_metadata_skip: bool = True
     enable_chunk_reuse: bool = True
+    # user feedback modeling
+    enable_topic_extraction: bool = False
 
     # ---------- factory + validation ----------
     @classmethod
