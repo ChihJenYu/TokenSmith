@@ -258,3 +258,7 @@ tests/results
 evaluation/archive
 evaluation/runtime
 evaluation/results
+evaluation/data/*.md
+!evaluation/data
+!evaluation/data/README
+!evaluation/data/workload_assets.tar.gz

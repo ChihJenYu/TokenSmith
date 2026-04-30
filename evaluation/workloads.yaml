@@ -35,38 +35,28 @@ query_sets:
   chapter19_core:
     - id: failure_classification
       text: What types of failures can occur in a database system?
-      relevant_section_prefixes: ["19.1"]
     - id: stable_storage
       text: How is stable storage implemented?
-      relevant_section_prefixes: ["19.2.1"]
     - id: log_records
       text: What information is stored in a log record?
-      relevant_section_prefixes: ["19.3.1"]
     - id: checkpoints
       text: What is the purpose of checkpoints in recovery?
-      relevant_section_prefixes: ["19.3.6"]
     - id: recovery_after_crash
       text: How does the recovery algorithm handle a system crash?
-      relevant_section_prefixes: ["19.4.2"]
 
   chapter12_added_doc:
     - id: reliability_availability
       text: What is the difference between reliability and availability?
-      relevant_section_prefixes: ["12.1.2"]
     - id: communication_failures
       text: What communication failures can occur in a distributed DBMS?
-      relevant_section_prefixes: ["12.2.4"]
     - id: two_phase_commit
       text: How does the two-phase commit protocol work?
-      relevant_section_prefixes: ["12.4.2"]
 
   added_section_19_5:
     - id: archive_media_failures
       text: How does archiving protect a database against media failures?
-      relevant_section_prefixes: ["19.5", "19.5.1"]
     - id: nonquiescent_archiving
       text: What is nonquiescent archiving?
-      relevant_section_prefixes: ["19.5.2"]
 
 corpora:
   base_ch19:
