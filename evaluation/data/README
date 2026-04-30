@@ -1,0 +1,4 @@
+To fully reproduce the evaluation pipeline, extract the `workload_assets.tar.gz` zipped file in this directory. This will create four assets used in the evaluation script.
+```
+tar -xzvf workload_assets.tar.gz
+```

@@ -30,6 +30,66 @@ def load_session_logs(session_id: str) -> List[Dict[str, Any]]:
     return logs
 
 
+def load_index_logs() -> List[Dict[str, Any]]:
+    logs = []
+    for log_file in sorted(Path("logs").glob("index_*.json")):
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                log_data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"Warning: Could not parse {log_file.name}: {e}")
+            continue
+
+        if log_data.get("event") == "index_run":
+            log_data["_log_file"] = str(log_file)
+            logs.append(log_data)
+    return logs
+
+
+def analyze_index_runs(index_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    metric_names = [
+        "total_documents_scanned",
+        "changed_documents",
+        "changed_sections",
+        "changed_chunks",
+        "reused_chunks",
+        "re_embedded_chunks",
+        "chunk_reuse_rate",
+        "embedding_time_seconds",
+        "total_update_time_seconds",
+    ]
+
+    metric_values: Dict[str, List[float]] = {metric_name: [] for metric_name in metric_names}
+    modes = Counter()
+
+    for run in index_runs:
+        modes[run.get("mode", "unknown")] += 1
+        metrics = run.get("metrics", {})
+        for metric_name in metric_names:
+            metric_value = metrics.get(metric_name)
+            if metric_value is not None:
+                metric_values[metric_name].append(metric_value)
+
+    summaries = {}
+    for metric_name, values in metric_values.items():
+        if not values:
+            continue
+        summaries[metric_name] = {
+            "latest": values[-1],
+            "mean": statistics.mean(values),
+            "median": statistics.median(values),
+            "min": min(values),
+            "max": max(values),
+        }
+
+    return {
+        "run_count": len(index_runs),
+        "modes": dict(modes),
+        "metrics": summaries,
+        "latest_log_file": index_runs[-1].get("_log_file") if index_runs else None,
+    }
+
+
 def analyze_retrieval_performance(queries: List[Dict]) -> Dict[str, Any]:
     """Analyze FAISS retrieval performance."""
     distances = []
@@ -189,10 +249,44 @@ def analyze_query_patterns(queries: List[Dict]) -> Dict[str, Any]:
 def main():
     parser = argparse.ArgumentParser(description="Analyze RAG pipeline logs")
     parser.add_argument("--session_id", help="Session ID to analyze", default="20250918_004127")
+    parser.add_argument(
+        "--log_type",
+        choices=["chat", "index"],
+        default="chat",
+        help="Which logs to analyze",
+    )
     parser.add_argument("--detailed", action="store_true", help="Show detailed analysis")
     parser.add_argument("--export-json", help="Export analysis to JSON file")
 
     args = parser.parse_args()
+
+    if args.log_type == "index":
+        index_runs = load_index_logs()
+        if not index_runs:
+            print("No index-run logs found in logs/.")
+            return
+
+        analysis = analyze_index_runs(index_runs)
+        print("\n=== INDEX RUN ANALYSIS ===\n")
+        print(f"Runs analyzed: {analysis['run_count']}")
+        print(f"Modes: {analysis['modes']}")
+        if analysis["latest_log_file"]:
+            print(f"Latest log: {analysis['latest_log_file']}")
+        print()
+
+        for metric_name, summary in analysis["metrics"].items():
+            print(f"{metric_name}:")
+            print(f"  latest: {summary['latest']}")
+            print(f"  mean: {summary['mean']}")
+            print(f"  median: {summary['median']}")
+            print(f"  min: {summary['min']}")
+            print(f"  max: {summary['max']}")
+            print()
+
+        if args.export_json:
+            with open(args.export_json, "w", encoding="utf-8") as f:
+                json.dump(analysis, f, indent=2)
+        return
 
     # Load logs
     logs = load_session_logs(args.session_id)

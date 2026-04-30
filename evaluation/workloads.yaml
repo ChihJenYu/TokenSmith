@@ -1,0 +1,127 @@
+schema_version: 1
+
+defaults:
+  top_k: 5
+
+ablations:
+  - id: metadata_on__reuse_on
+    enable_metadata_skip: true
+    enable_chunk_reuse: true
+  - id: metadata_off__reuse_on
+    enable_metadata_skip: false
+    enable_chunk_reuse: true
+  - id: metadata_on__reuse_off
+    enable_metadata_skip: true
+    enable_chunk_reuse: false
+  - id: metadata_off__reuse_off
+    enable_metadata_skip: false
+    enable_chunk_reuse: false
+
+assets:
+  documents:
+    basedoc_19:
+      path: evaluation/data/basedoc_19.md
+    adddoc:
+      path: evaluation/data/adddoc.md
+  snippets:
+    modsec_19_1:
+      path: evaluation/data/modsec_19.1.md
+      format: body_only
+    addsec_19_5:
+      path: evaluation/data/addsec_19.5.md
+      format: full_markdown
+
+query_sets:
+  chapter19_core:
+    - id: failure_classification
+      text: What types of failures can occur in a database system?
+    - id: stable_storage
+      text: How is stable storage implemented?
+    - id: log_records
+      text: What information is stored in a log record?
+    - id: checkpoints
+      text: What is the purpose of checkpoints in recovery?
+    - id: recovery_after_crash
+      text: How does the recovery algorithm handle a system crash?
+
+  chapter12_added_doc:
+    - id: reliability_availability
+      text: What is the difference between reliability and availability?
+    - id: communication_failures
+      text: What communication failures can occur in a distributed DBMS?
+    - id: two_phase_commit
+      text: How does the two-phase commit protocol work?
+
+  added_section_19_5:
+    - id: archive_media_failures
+      text: How does archiving protect a database against media failures?
+    - id: nonquiescent_archiving
+      text: What is nonquiescent archiving?
+
+corpora:
+  base_ch19:
+    documents: [basedoc_19]
+
+  ch19_plus_adddoc:
+    base: base_ch19
+    documents: [adddoc]
+
+  ch19_mod_19_1:
+    base: base_ch19
+    edits:
+      - type: replace_section_body
+        document: basedoc_19
+        section_number: "19.1"
+        snippet: modsec_19_1
+
+  ch19_swapped_19_3_19_4:
+    base: base_ch19
+    edits:
+      - type: swap_sections
+        document: basedoc_19
+        first_section_number: "19.3"
+        second_section_number: "19.4"
+
+  ch19_plus_19_5:
+    base: base_ch19
+    edits:
+      - type: append_snippet
+        document: basedoc_19
+        snippet: addsec_19_5
+
+workloads:
+  - id: document_addition
+    description: Add a second chapter-sized markdown document to the corpus.
+    source_corpus: base_ch19
+    target_corpus: ch19_plus_adddoc
+    query_sets: [chapter19_core, chapter12_added_doc]
+
+  - id: document_removal
+    description: Remove the added chapter-sized markdown document from the corpus.
+    source_corpus: ch19_plus_adddoc
+    target_corpus: base_ch19
+    query_sets: [chapter19_core]
+
+  - id: section_modify
+    description: Replace section 19.1 with alternate recovery text.
+    source_corpus: base_ch19
+    target_corpus: ch19_mod_19_1
+    query_sets: [chapter19_core]
+
+  - id: section_reorder
+    description: Swap the order of sections 19.3 and 19.4.
+    source_corpus: base_ch19
+    target_corpus: ch19_swapped_19_3_19_4
+    query_sets: [chapter19_core]
+
+  - id: section_addition
+    description: Append section 19.5 to the base chapter.
+    source_corpus: base_ch19
+    target_corpus: ch19_plus_19_5
+    query_sets: [chapter19_core, added_section_19_5]
+
+  - id: section_removal
+    description: Remove the appended section 19.5 from the chapter.
+    source_corpus: ch19_plus_19_5
+    target_corpus: base_ch19
+    query_sets: [chapter19_core]
