@@ -17,7 +17,7 @@ env:
 	@echo "Creating TokenSmith conda environment..."
 	conda env create -f environment.yml -n tokensmith || conda env update -f environment.yml -n tokensmith
 	@echo "Running platform-specific setup..."
-	conda run -n tokensmith bash scripts/setup_env.sh tokensmith
+	conda run -n tokensmith bash scripts/setup_env.sh
 
 # Update environment from environment.yml
 update-env:
@@ -31,7 +31,7 @@ build-llama:
 
 # Install package in development mode (no dependencies, they're from conda)
 install:
-	conda run -n tokensmith python -m pip install -e . --no-deps --no-build-isolation
+	conda run -n tokensmith pip install -e . --no-deps
 
 # Full build process
 build: env install
